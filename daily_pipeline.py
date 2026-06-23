@@ -12,6 +12,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -58,24 +59,31 @@ def run_pipeline(send_email: bool = False) -> bool:
     today = get_today()
     date_str = today.strftime("%Y%m%d")
     logger = logging.getLogger("pipeline")
+    timings = {}
+    pipeline_ok = True
+
     logger.info("=" * 60)
     logger.info("Daily Pipeline starting for %s", today.isoformat())
     logger.info("Send email: %s", send_email)
     logger.info("=" * 60)
 
-    # Ensure output dir
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Step 1: AIHOT News ──
+    t0 = time.time()
     news_items = []
+    news_status = "success"
     try:
         import aihot_scraper
         news_items = aihot_scraper.scrape()
         logger.info("AIHOT news: %d items", len(news_items))
     except Exception as exc:
+        news_status = f"error: {exc}"
         logger.error("AIHOT scraper failed: %s", exc)
+    timings["news_scrape"] = time.time() - t0
 
     # ── Step 2: Paper search ──
+    t0 = time.time()
     all_papers = []
     source_statuses = []
     try:
@@ -86,23 +94,51 @@ def run_pipeline(send_email: bool = False) -> bool:
     except Exception as exc:
         logger.error("Paper search failed: %s", exc)
         source_statuses = [{"source": "all", "count": 0, "status": f"error: {exc}"}]
+        pipeline_ok = False
+    timings["paper_search"] = time.time() - t0
 
-    # ── Step 3: Full text reading ──
+    # ── Step 3: Rule-based scoring (quick pass) ──
+    t0 = time.time()
+    try:
+        import llm_analysis
+        # First pass: rule-based score to decide which papers get full-text
+        for paper in all_papers:
+            if paper.get("relevance_score") is None:
+                paper["relevance_score"] = llm_analysis.rule_based_score(paper)
+        logger.info("Rule-based scoring complete for %d papers", len(all_papers))
+    except Exception as exc:
+        logger.warning("Rule-based scoring failed: %s", exc)
+    timings["relevance_scoring"] = time.time() - t0
+
+    # ── Step 4: Select & download full text (only top papers) ──
+    t0 = time.time()
+    full_text_stats = {"total_papers": len(all_papers), "attempted": 0, "success": 0}
     try:
         import full_text_reader
+        selected_ft, skipped = full_text_reader.select_papers_for_full_text(all_papers)
+        full_text_stats["attempted"] = len(selected_ft)
         all_papers = full_text_reader.read_papers(all_papers)
+        ft_ok = sum(1 for p in all_papers if p.get("full_text_source") == "pdf")
+        full_text_stats["success"] = ft_ok
+        logger.info("Full-text: attempted %d, got %d full PDFs", len(selected_ft), ft_ok)
     except Exception as exc:
         logger.warning("Full-text reading failed: %s", exc)
+        for p in all_papers:
+            p.setdefault("full_text", p.get("abstract", ""))
+            p.setdefault("full_text_source", "abstract_only")
+    timings["pdf_download"] = time.time() - t0
 
-    # ── Step 4: LLM / rule-based analysis ──
+    # ── Step 5: LLM / rule-based analysis ──
+    t0 = time.time()
     try:
         import llm_analysis
         all_papers = llm_analysis.analyze_papers(all_papers)
         logger.info("Analysis complete")
     except Exception as exc:
         logger.warning("LLM analysis failed: %s", exc)
+    timings["llm_analysis"] = time.time() - t0
 
-    # ── Step 5: Storage (SQLite + Excel) ──
+    # ── Step 6: Storage (SQLite + Excel) ──
     try:
         import storage
         if news_items:
@@ -114,23 +150,33 @@ def run_pipeline(send_email: bool = False) -> bool:
     except Exception as exc:
         logger.warning("Storage failed: %s", exc)
 
-    # ── Step 6: Report generation ──
+    # ── Step 7: Report generation ──
+    t0 = time.time()
     report_success = False
     md_content = ""
     html_content = ""
     try:
         import report_generator
-        result = report_generator.save_report(news_items, all_papers, source_statuses)
+        result = report_generator.save_report(
+            news_items=news_items,
+            papers=all_papers,
+            source_statuses=source_statuses,
+            full_text_stats=full_text_stats,
+            timings=timings,
+            news_status=news_status,
+        )
         md_content = result["md_content"]
         html_content = result["html_content"]
         logger.info("Reports generated: %s, %s", result["md"], result["html"])
         report_success = True
     except Exception as exc:
         logger.error("Report generation failed: %s", exc)
+    timings["report_generation"] = time.time() - t0
 
-    # ── Step 7: Email (optional) ──
+    # ── Step 8: Email (always try even if partial failures) ──
+    t0 = time.time()
     email_success = False
-    if send_email and report_success and html_content:
+    if send_email and html_content:
         try:
             import send_daily_report_email as mailer
             attachments = []
@@ -146,19 +192,27 @@ def run_pipeline(send_email: bool = False) -> bool:
             )
         except Exception as exc:
             logger.error("Email sending failed: %s", exc)
-    elif send_email and not report_success:
-        logger.warning("Report generation failed — skipping email")
+    elif send_email and not html_content:
+        logger.warning("Report content empty — skipping email")
+    timings["email_sending"] = time.time() - t0
 
     # ── Summary ──
+    total_time = sum(timings.values())
     logger.info("=" * 60)
     logger.info("Pipeline summary for %s:", today.isoformat())
-    logger.info("  AIHOT news:     %d items", len(news_items))
+    logger.info("  AIHOT news:     %d items (%s)", len(news_items), news_status)
     logger.info("  Total papers:   %d", len(all_papers))
-    logger.info("  Report:         %s", "✅ Success" if report_success else "❌ Failed")
-    logger.info("  Sources:        %d/%d succeeded",
-                sum(1 for s in source_statuses if s.get("status") == "success"),
-                len(source_statuses))
+    logger.info("  Full-text:      attempted %d, got %d PDFs",
+                full_text_stats["attempted"], full_text_stats["success"])
+    logger.info("  Report:         %s" if report_success else "  Report:         ❌ Failed")
+    ok_sources = sum(1 for s in source_statuses if s.get("status") == "success")
+    logger.info("  Sources:        %d/%d succeeded", ok_sources, len(source_statuses))
     logger.info("  Email:          %s", "✅ Sent" if email_success else "⏭️  Skipped" if not send_email else "❌ Failed")
+    logger.info("")
+    logger.info("  ⏱️  Timings:")
+    for step, t in timings.items():
+        logger.info("    %-22s: %.1fs", step, t)
+    logger.info("    %-22s: %.1fs", "total", total_time)
     logger.info("=" * 60)
 
     return report_success
@@ -173,7 +227,6 @@ def main():
 
     load_env()
 
-    # Determine run date
     if args.date:
         config.RUN_DATE = date.fromisoformat(args.date)
     else:

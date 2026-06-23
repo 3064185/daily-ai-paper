@@ -4,6 +4,7 @@ Generate Markdown and HTML daily reports from papers and news.
 import logging
 from datetime import date
 from pathlib import Path
+from typing import Optional
 
 from config import OUTPUT_DIR
 
@@ -19,15 +20,34 @@ def _safe(val) -> str:
     return str(val or "")
 
 
-def generate_markdown(news_items: list[dict], papers: list[dict],
-                      source_statuses: list[dict]) -> str:
+def _status_badge(status: str) -> str:
+    if status == "success":
+        return "✅ 成功"
+    elif status == "no_results":
+        return "⚠️ 无结果"
+    elif "timed out" in status.lower() or "timeout" in status.lower():
+        return "⏰ 超时"
+    elif "error" in status.lower():
+        return "❌ 失败"
+    else:
+        return f"⚠️ {status}"
+
+
+def generate_markdown(
+    news_items: list[dict],
+    papers: list[dict],
+    source_statuses: list[dict],
+    full_text_stats: Optional[dict] = None,
+    timings: Optional[dict] = None,
+    news_status: str = "success",
+) -> str:
     """Generate a Chinese Markdown daily report."""
     today = _today()
     lines = []
 
     lines.append(f"# AI 前沿与计算机科学论文日报 — {today.isoformat()}")
     lines.append("")
-    lines.append(f"> 生成时间：{date.today().isoformat()} · 数据来源：AIHOT + 6 个论文源")
+    lines.append(f"> 生成时间：{date.today().isoformat()}")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -36,6 +56,9 @@ def generate_markdown(news_items: list[dict], papers: list[dict],
     lines.append("## 🔥 AI 前沿新闻")
     lines.append("")
     if news_items:
+        status_icon = "✅" if news_status == "success" else "⚠️"
+        lines.append(f"*数据源：AIHOT ({status_icon} {news_status})*")
+        lines.append("")
         for i, item in enumerate(news_items[:10], 1):
             title = _safe(item.get("title", ""))
             summary = _safe(item.get("summary", ""))
@@ -67,12 +90,20 @@ def generate_markdown(news_items: list[dict], papers: list[dict],
     lines.append("")
 
     # Sort by relevance score
-    scored = [p for p in papers if p.get("relevance_score", 0) >= 6]
+    scored = [p for p in papers if p.get("relevance_score", 0) and p.get("relevance_score", 0) >= 6]
     scored.sort(key=lambda p: p.get("relevance_score", 0), reverse=True)
 
     if scored:
         lines.append(f"共筛选出 **{len(scored)}** 篇高相关论文：")
         lines.append("")
+
+        # Count papers by reading level
+        ft_count = sum(1 for p in scored if p.get("full_text_source") == "pdf")
+        abs_count = sum(1 for p in scored if p.get("full_text_source") in ("abstract_only", "abstract_only_low"))
+        if ft_count > 0:
+            lines.append(f"> 其中 {ft_count} 篇已读取全文，{abs_count} 篇基于摘要分析")
+            lines.append("")
+
         for i, paper in enumerate(scored[:10], 1):
             title = _safe(paper.get("title", ""))
             score = paper.get("relevance_score", "-")
@@ -88,10 +119,12 @@ def generate_markdown(news_items: list[dict], papers: list[dict],
             strengths = _safe(paper.get("strengths", ""))
             venue = _safe(paper.get("venue", ""))
             cited_by = paper.get("cited_by", "")
+            ft_source = paper.get("full_text_source", "abstract_only")
+            ft_label = "📄 全文" if ft_source == "pdf" else "📋 摘要" if ft_source == "abstract_only" else "📋 摘要(低)"
 
             lines.append(f"### {i}. {title}")
             lines.append("")
-            lines.append(f"**相关性评分：** {score}/10  |  **来源：** {source}")
+            lines.append(f"**相关性评分：** {score}/10  |  **来源：** {source}  |  **分析：** {ft_label}")
             lines.append("")
             if venue:
                 lines.append(f"**发表处：** {venue}")
@@ -131,9 +164,26 @@ def generate_markdown(news_items: list[dict], papers: list[dict],
     for s in source_statuses:
         name = _safe(s.get("source", ""))
         count = s.get("count", 0)
-        status = _safe(s.get("status", ""))
-        status_icon = "✅" if status == "success" else "⚠️" if status == "no_results" else "❌"
-        lines.append(f"| {name} | {count} | {status_icon} {status} |")
+        lines.append(f"| {name} | {count} | {_status_badge(_safe(s.get('status', '')))} |")
+    
+    if full_text_stats:
+        lines.append("")
+        lines.append("**全⽂读取状态：**")
+        lines.append("")
+        lines.append(f"- 总论文数：{full_text_stats.get('total_papers', 0)}")
+        lines.append(f"- 尝试全⽂下载：{full_text_stats.get('attempted', 0)} 篇")
+        lines.append(f"- 成功读取全⽂：{full_text_stats.get('success', 0)} 篇")
+        lines.append(f"- 其余论文基于摘要分析")
+    
+    if timings:
+        lines.append("")
+        lines.append("**各阶段耗时：**")
+        lines.append("")
+        total = sum(timings.values())
+        for step, t in timings.items():
+            lines.append(f"- {step}: {t:.1f}s")
+        lines.append(f"- total: {total:.1f}s")
+
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -174,14 +224,20 @@ hr {{ border: none; border-top: 1px solid #eee; margin: 30px 0; }}
     return html
 
 
-def save_report(news_items: list[dict], papers: list[dict],
-                source_statuses: list[dict]) -> dict:
+def save_report(
+    news_items: list[dict],
+    papers: list[dict],
+    source_statuses: list[dict],
+    full_text_stats: Optional[dict] = None,
+    timings: Optional[dict] = None,
+    news_status: str = "success",
+) -> dict:
     """Generate and save both MD and HTML reports. Returns paths dict."""
     today = _today()
     date_str = today.strftime("%Y%m%d")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    md = generate_markdown(news_items, papers, source_statuses)
+    md = generate_markdown(news_items, papers, source_statuses, full_text_stats, timings, news_status)
     html = generate_html(md)
 
     md_path = OUTPUT_DIR / f"daily_combined_report_{date_str}.md"
