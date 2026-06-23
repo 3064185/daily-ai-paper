@@ -19,10 +19,11 @@ on:
 
 jobs:
   daily-digest:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o-mini' }}
       EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
       EMAIL_PORT: ${{ secrets.EMAIL_PORT || '465' }}
@@ -30,12 +31,6 @@ jobs:
       EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       EMAIL_TO: ${{ secrets.EMAIL_TO }}
       SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
-      OPENALEX_EMAIL: ${{ secrets.OPENALEX_EMAIL }}
-      REQUEST_TIMEOUT: ${{ secrets.REQUEST_TIMEOUT || '25' }}
-      MAX_PAPERS_PER_SOURCE: ${{ vars.MAX_PAPERS_PER_SOURCE || '30' }}
-      DOWNLOAD_OPEN_ACCESS_PDFS: ${{ vars.DOWNLOAD_OPEN_ACCESS_PDFS || 'true' }}
-      MAX_PDF_ATTACHMENT_MB: ${{ vars.MAX_PDF_ATTACHMENT_MB || '12' }}
-      MAX_EMAIL_ATTACHMENT_MB: ${{ vars.MAX_EMAIL_ATTACHMENT_MB || '18' }}
 
     steps:
       - uses: actions/checkout@v4
