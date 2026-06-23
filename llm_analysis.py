@@ -1,6 +1,7 @@
 """
 LLM-based structured analysis of papers using OpenAI.
 Falls back to rule-based analysis when unavailable.
+Supports OpenAI and DeepSeek via OPENAI_BASE_URL.
 """
 import json
 import logging
@@ -9,7 +10,7 @@ from typing import Optional
 
 from openai import OpenAI
 
-from config import OPENAI_API_KEY, OPENAI_MODEL
+from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 
 logger = logging.getLogger("llm")
 
@@ -31,7 +32,10 @@ Only output valid JSON, no markdown fences or preamble."""
 def _build_client() -> Optional[OpenAI]:
     if not OPENAI_API_KEY:
         return None
-    return OpenAI(api_key=OPENAI_API_KEY)
+    kwargs = {"api_key": OPENAI_API_KEY}
+    if OPENAI_BASE_URL:
+        kwargs["base_url"] = OPENAI_BASE_URL
+    return OpenAI(**kwargs)
 
 
 def analyze_paper_openai(title: str, abstract: str, full_text: str = "") -> Optional[dict]:

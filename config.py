@@ -1,21 +1,36 @@
 """
 Configuration for Daily AI News & Paper Digest.
+Auto-loads .env file on first import.
 """
 import os
 from pathlib import Path
 
-# ── Paths ─────────────────────────────────────────────────────────────
+# ── Auto-load .env ──────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
+ENV_FILE = BASE_DIR / ".env"
+
+if ENV_FILE.exists():
+    for line in ENV_FILE.read_text("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip("\"'")
+        if key:  # only set if not already set by system env
+            os.environ.setdefault(key, val)
+
+# ── Paths ─────────────────────────────────────────────────────────────
 OUTPUT_DIR = BASE_DIR / "outputs"
 LOG_DIR = BASE_DIR / "logs"
-ENV_FILE = BASE_DIR / ".env"
 
 # ── Date ──────────────────────────────────────────────────────────────
 # Override with --date YYYY-MM-DD for backfill
 RUN_DATE = None          # datetime.date, set by daily_pipeline
 
-# ── OpenAI ────────────────────────────────────────────────────────────
+# ── LLM (OpenAI-compatible, supports DeepSeek etc.) ──────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # ── Email (SMTP SSL) ──────────────────────────────────────────────────

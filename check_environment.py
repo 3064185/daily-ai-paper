@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Environment checker — verifies configuration, network, and dependencies.
+Config auto-loads .env on import, so no manual load needed.
 """
 import logging
-import os
 import socket
 import sys
 from pathlib import Path
@@ -18,6 +18,10 @@ def check(ok: bool, msg: str):
     return ok
 
 
+def status_label(val: str) -> str:
+    return "configured" if val else "not configured"
+
+
 def main():
     ok = True
 
@@ -30,7 +34,7 @@ def main():
                 f"Python version: {sys.version.split()[0]} (need >=3.9)")
 
     # ── Dependencies ──
-    deps = ["httpx", "beautifulsoup4", "lxml", "openai", "openpyxl",
+    deps = ["httpx", "bs4", "lxml", "openai", "openpyxl",
             "feedparser", "markdown"]
     for dep in deps:
         try:
@@ -39,19 +43,32 @@ def main():
         except ImportError:
             ok &= check(False, f"  {dep}: MISSING")
 
-    # ── Config ──
+    # ── Config (config.py auto-loads .env) ──
     from config import (
         EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO,
-        OPENAI_API_KEY, OUTPUT_DIR,
+        OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OUTPUT_DIR,
     )
+
     env_path = Path(__file__).parent / ".env"
     ok &= check(env_path.exists(), f".env file: {'found' if env_path.exists() else 'MISSING'}")
-    ok &= check(bool(EMAIL_HOST), f"EMAIL_HOST: {EMAIL_HOST or 'NOT SET'}")
-    ok &= check(bool(EMAIL_USER), f"EMAIL_USER: {EMAIL_USER or 'NOT SET'}")
-    ok &= check(bool(EMAIL_PASSWORD), f"EMAIL_PASSWORD: {'***set***' if EMAIL_PASSWORD else 'NOT SET'}")
-    ok &= check(bool(EMAIL_TO), f"EMAIL_TO: {EMAIL_TO or 'NOT SET'}")
-    ok &= check(bool(OPENAI_API_KEY) or True,  # optional
-                f"OPENAI_API_KEY: {'***set***' if OPENAI_API_KEY else 'not set (optional, rule-based fallback will be used)'}")
+
+    # Determine LLM provider
+    llm_provider = "OpenAI"
+    if "deepseek" in OPENAI_BASE_URL.lower():
+        llm_provider = "DeepSeek"
+    elif OPENAI_BASE_URL:
+        llm_provider = f"Custom ({OPENAI_BASE_URL})"
+
+    ok &= check(bool(OPENAI_API_KEY), f"LLM provider: {llm_provider}")
+    ok &= check(bool(OPENAI_API_KEY), f"  API key: {status_label(OPENAI_API_KEY)}")
+    ok &= check(bool(OPENAI_BASE_URL), f"  Base URL: {OPENAI_BASE_URL if OPENAI_BASE_URL else 'not set (using OpenAI default)'}")
+    ok &= check(bool(OPENAI_MODEL), f"  Model: {OPENAI_MODEL}")
+
+    ok &= check(bool(EMAIL_HOST), f"EMAIL_HOST: {status_label(EMAIL_HOST)}")
+    ok &= check(bool(EMAIL_PORT), f"EMAIL_PORT: {EMAIL_PORT}")
+    ok &= check(bool(EMAIL_USER), f"EMAIL_USER: {status_label(EMAIL_USER)}")
+    ok &= check(bool(EMAIL_PASSWORD), f"EMAIL_PASSWORD: {status_label(EMAIL_PASSWORD)}")
+    ok &= check(bool(EMAIL_TO), f"EMAIL_TO: {status_label(EMAIL_TO)}")
 
     # ── Directory writability ──
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -82,7 +99,7 @@ def main():
     # ── Network: arXiv ──
     try:
         r = httpx.get("http://export.arxiv.org/api/query?search_query=cat:cs.AI&start=0&max_results=1", timeout=15)
-        ok &= check(r.status_code == 200, f"arXiv API: reachable (HTTP {r.status_code})")
+        ok &= check(r.status_code in (200, 301), f"arXiv API: reachable (HTTP {r.status_code})")
     except Exception as e:
         ok &= check(False, f"arXiv API: UNREACHABLE ({e})")
 
