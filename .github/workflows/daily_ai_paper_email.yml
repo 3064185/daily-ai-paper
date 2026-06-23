@@ -1,0 +1,75 @@
+name: Daily AI Paper Digest
+
+on:
+  schedule:
+    # UTC 01:17 = Beijing 09:17
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - dry_run
+          - smtp_test
+          - environment_check
+
+jobs:
+  daily-digest:
+    runs-on: ubuntu-22.04
+
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o-mini' }}
+      EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+      EMAIL_PORT: ${{ secrets.EMAIL_PORT || '465' }}
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
+      OPENALEX_EMAIL: ${{ secrets.OPENALEX_EMAIL }}
+      REQUEST_TIMEOUT: ${{ secrets.REQUEST_TIMEOUT || '25' }}
+      MAX_PAPERS_PER_SOURCE: ${{ vars.MAX_PAPERS_PER_SOURCE || '30' }}
+      DOWNLOAD_OPEN_ACCESS_PDFS: ${{ vars.DOWNLOAD_OPEN_ACCESS_PDFS || 'true' }}
+      MAX_PDF_ATTACHMENT_MB: ${{ vars.MAX_PDF_ATTACHMENT_MB || '12' }}
+      MAX_EMAIL_ATTACHMENT_MB: ${{ vars.MAX_EMAIL_ATTACHMENT_MB || '18' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Environment check
+        if: github.event.inputs.mode == 'environment_check' || github.event.inputs.mode == ''
+        run: python check_environment.py
+
+      - name: SMTP test
+        if: github.event.inputs.mode == 'smtp_test'
+        run: python send_daily_report_email.py --test
+
+      - name: Dry run (no email)
+        if: github.event.inputs.mode == 'dry_run'
+        run: python daily_pipeline.py --no-email
+
+      - name: Full run
+        if: github.event.inputs.mode == 'full' || github.event.schedule != ''
+        run: python daily_pipeline.py --send-email
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-reports
+          path: outputs/
+          retention-days: 14
