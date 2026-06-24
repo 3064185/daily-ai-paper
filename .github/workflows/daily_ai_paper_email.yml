@@ -58,7 +58,7 @@ jobs:
         run: python daily_pipeline.py --no-email
 
       - name: Full run
-        if: github.event.inputs.mode == 'full' || github.event.schedule != ''
+        if: github.event.inputs.mode == 'full' || github.event_name == 'schedule'
         run: python daily_pipeline.py --send-email
 
       - name: Upload report artifacts
