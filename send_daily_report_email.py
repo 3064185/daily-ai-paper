@@ -2,6 +2,7 @@
 Send daily report via SMTP SSL with HTML body, embedded images, and attachments.
 3 retries with exponential backoff.
 """
+import argparse
 import logging
 import os
 import smtplib
@@ -16,13 +17,29 @@ from typing import Optional
 
 from config import (
     EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO,
-    SENDGRID_API_KEY, MAX_EMAIL_ATTACHMENT_MB, OUTPUT_DIR,
+    SENDGRID_API_KEY, SENDGRID_FROM_EMAIL, MAX_EMAIL_ATTACHMENT_MB, OUTPUT_DIR,
 )
 
 logger = logging.getLogger("email")
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [5, 30, 120]  # seconds
+
+
+def is_github_actions() -> bool:
+    return os.getenv("GITHUB_ACTIONS") == "true"
+
+
+def validate_sendgrid_config() -> bool:
+    """Validate SendGrid settings without printing secret values."""
+    checks = {
+        "SENDGRID_API_KEY": bool(SENDGRID_API_KEY),
+        "SENDGRID_FROM_EMAIL": bool(SENDGRID_FROM_EMAIL),
+        "EMAIL_TO": bool(EMAIL_TO),
+    }
+    for name, configured in checks.items():
+        logger.info("%s: %s", name, "configured" if configured else "not configured")
+    return all(checks.values())
 
 
 def send_email_sendgrid(html_content: str, md_content: str = "",
@@ -39,7 +56,7 @@ def send_email_sendgrid(html_content: str, md_content: str = "",
     # Build SendGrid payload
     payload = {
         "personalizations": [{"to": [{"email": EMAIL_TO}]}],
-        "from": {"email": EMAIL_USER, "name": "AI \u524d\u6cbf\u65e5\u62a5"},
+        "from": {"email": SENDGRID_FROM_EMAIL, "name": "AI \u524d\u6cbf\u65e5\u62a5"},
         "subject": subject,
         "content": [
             {"type": "text/plain", "value": (md_content or "")[:5000]},
@@ -98,19 +115,12 @@ def send_email_sendgrid(html_content: str, md_content: str = "",
     return False
 
 
-def send_email(html_content: str, md_content: str = "",
-               date_str: Optional[str] = None,
-               attachments: Optional[list[Path]] = None) -> bool:
-    """Send daily report email. Uses SendGrid if SENDGRID_API_KEY is set, else SMTP."""
+def send_email_smtp(html_content: str, md_content: str = "",
+                    date_str: Optional[str] = None,
+                    attachments: Optional[list[Path]] = None) -> bool:
+    """Send daily report email via SMTP. Intended for local testing."""
     today = date.today()
     ds = date_str or today.strftime("%Y%m%d")
-
-    if SENDGRID_API_KEY:
-        logger.info("Using SendGrid to send email…")
-        if send_email_sendgrid(html_content, md_content, date_str, attachments):
-            return True
-        logger.warning("SendGrid failed, falling back to SMTP…")
-    # else: fall through to SMTP
 
     if not all([EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO]):
         logger.error("SMTP config incomplete. Check .env")
@@ -201,43 +211,87 @@ def send_email(html_content: str, md_content: str = "",
     return False
 
 
-def send_test_email() -> bool:
-    """Send a simple test email to verify SMTP configuration."""
+def send_email(html_content: str, md_content: str = "",
+               date_str: Optional[str] = None,
+               attachments: Optional[list[Path]] = None,
+               provider: str = "auto") -> bool:
+    """Send daily report email using the selected provider."""
+    if provider not in {"auto", "sendgrid", "smtp"}:
+        logger.error("Unknown email provider: %s", provider)
+        return False
+
+    effective_provider = "sendgrid" if provider == "auto" and is_github_actions() else provider
+
+    if effective_provider == "sendgrid":
+        if not validate_sendgrid_config():
+            logger.error("SendGrid config incomplete; email not sent.")
+            return False
+        logger.info("Using SendGrid to send email.")
+        return send_email_sendgrid(html_content, md_content, date_str, attachments)
+
+    if effective_provider == "smtp":
+        logger.info("Using SMTP to send email.")
+        return send_email_smtp(html_content, md_content, date_str, attachments)
+
+    if validate_sendgrid_config():
+        logger.info("Using SendGrid to send email.")
+        if send_email_sendgrid(html_content, md_content, date_str, attachments):
+            return True
+        logger.warning("SendGrid failed locally, falling back to SMTP.")
+    else:
+        logger.info("SendGrid config incomplete locally; falling back to SMTP.")
+
+    return send_email_smtp(html_content, md_content, date_str, attachments)
+
+
+def send_test_email(provider: str = "auto") -> bool:
+    """Send a simple test email to verify provider configuration."""
     html = """<html><body>
-    <h2>SMTP 测试邮件</h2>
+    <h2>邮件测试</h2>
     <p>这是一封来自 AI 前沿日报系统的测试邮件。</p>
-    <p>如果你收到这封邮件，说明 SMTP 配置正确。</p>
+    <p>如果你收到这封邮件，说明当前发信通道配置正确。</p>
     <p>发送时间：{time}</p>
     </body></html>""".format(time=time.strftime("%Y-%m-%d %H:%M:%S"))
-    return send_email(html, md_content="SMTP 测试邮件")
+    return send_email(html, md_content="邮件测试", provider=provider)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Send daily AI paper report email")
+    parser.add_argument("--provider", choices=["auto", "sendgrid", "smtp"], default="auto",
+                        help="Email provider to use")
+    parser.add_argument("--test", action="store_true", help="Send a test email")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+
+    if args.test:
+        logger.info("Sending test email…")
+        success = send_test_email(provider=args.provider)
+        print(f"Test email {'sent successfully!' if success else 'FAILED'}")
+        return 0 if success else 1
+
+    # Try to find today's report
+    today = date.today().strftime("%Y%m%d")
+    md_path = OUTPUT_DIR / f"daily_combined_report_{today}.md"
+    html_path = OUTPUT_DIR / f"daily_combined_report_{today}.html"
+
+    if not html_path.exists():
+        logger.error("No report found for today: %s", html_path)
+        return 1
+
+    md_content = md_path.read_text("utf-8") if md_path.exists() else ""
+    html_content = html_path.read_text("utf-8")
+
+    # Collect attachments (Excel files, PDFs)
+    attachments = sorted(OUTPUT_DIR.glob(f"daily_aihot_{today}.xlsx"))
+    attachments += sorted(OUTPUT_DIR.glob(f"daily_cs_papers_{today}.xlsx"))
+
+    success = send_email(html_content, md_content, date_str=today,
+                         attachments=attachments, provider=args.provider)
+    print(f"Email {'sent successfully!' if success else 'FAILED'}")
+    return 0 if success else 1
 
 
 if __name__ == "__main__":
     import sys
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-
-    if "--test" in sys.argv:
-        logger.info("Sending test email…")
-        success = send_test_email()
-        print(f"Test email {'sent successfully!' if success else 'FAILED'}")
-        sys.exit(0 if success else 1)
-    else:
-        # Try to find today's report
-        today = date.today().strftime("%Y%m%d")
-        md_path = OUTPUT_DIR / f"daily_combined_report_{today}.md"
-        html_path = OUTPUT_DIR / f"daily_combined_report_{today}.html"
-
-        if not html_path.exists():
-            logger.error("No report found for today: %s", html_path)
-            sys.exit(1)
-
-        md_content = md_path.read_text("utf-8") if md_path.exists() else ""
-        html_content = html_path.read_text("utf-8")
-
-        # Collect attachments (Excel files, PDFs)
-        attachments = sorted(OUTPUT_DIR.glob(f"daily_aihot_{today}.xlsx"))
-        attachments += sorted(OUTPUT_DIR.glob(f"daily_cs_papers_{today}.xlsx"))
-
-        success = send_email(html_content, md_content, date_str=today, attachments=attachments)
-        print(f"Email {'sent successfully!' if success else 'FAILED'}")
-        sys.exit(0 if success else 1)
+    sys.exit(main())

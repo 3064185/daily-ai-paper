@@ -48,6 +48,7 @@ def main():
     from config import (
         EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO,
         OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OUTPUT_DIR,
+        SENDGRID_API_KEY, SENDGRID_FROM_EMAIL,
     )
 
     env_path = Path(__file__).parent / ".env"
@@ -69,11 +70,18 @@ def main():
     ok &= check(bool(OPENAI_BASE_URL), f"  Base URL: {OPENAI_BASE_URL if OPENAI_BASE_URL else 'not set (using OpenAI default)'}")
     ok &= check(bool(OPENAI_MODEL), f"  Model: {OPENAI_MODEL}")
 
-    ok &= check(bool(EMAIL_HOST), f"EMAIL_HOST: {status_label(EMAIL_HOST)}")
-    ok &= check(bool(EMAIL_PORT), f"EMAIL_PORT: {EMAIL_PORT}")
-    ok &= check(bool(EMAIL_USER), f"EMAIL_USER: {status_label(EMAIL_USER)}")
-    ok &= check(bool(EMAIL_PASSWORD), f"EMAIL_PASSWORD: {status_label(EMAIL_PASSWORD)}")
-    ok &= check(bool(EMAIL_TO), f"EMAIL_TO: {status_label(EMAIL_TO)}")
+    if in_ci:
+        ok &= check(bool(SENDGRID_API_KEY), f"SENDGRID_API_KEY: {status_label(SENDGRID_API_KEY)}")
+        ok &= check(bool(SENDGRID_FROM_EMAIL), f"SENDGRID_FROM_EMAIL: {status_label(SENDGRID_FROM_EMAIL)}")
+        ok &= check(bool(EMAIL_TO), f"EMAIL_TO: {status_label(EMAIL_TO)}")
+    else:
+        ok &= check(bool(EMAIL_HOST), f"EMAIL_HOST: {status_label(EMAIL_HOST)}")
+        ok &= check(bool(EMAIL_PORT), f"EMAIL_PORT: {EMAIL_PORT}")
+        ok &= check(bool(EMAIL_USER), f"EMAIL_USER: {status_label(EMAIL_USER)}")
+        ok &= check(bool(EMAIL_PASSWORD), f"EMAIL_PASSWORD: {status_label(EMAIL_PASSWORD)}")
+        ok &= check(bool(EMAIL_TO), f"EMAIL_TO: {status_label(EMAIL_TO)}")
+        ok &= check(bool(SENDGRID_API_KEY), f"SENDGRID_API_KEY: {status_label(SENDGRID_API_KEY)}")
+        ok &= check(bool(SENDGRID_FROM_EMAIL), f"SENDGRID_FROM_EMAIL: {status_label(SENDGRID_FROM_EMAIL)}")
 
     # ── Directory writability ──
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -85,13 +93,14 @@ def main():
     except Exception as e:
         ok &= check(False, f"Output dir ({OUTPUT_DIR}): NOT writable ({e})")
 
-    # ── SMTP TCP connectivity ──
-    try:
-        sock = socket.create_connection((EMAIL_HOST, EMAIL_PORT), timeout=10)
-        sock.close()
-        ok &= check(True, f"SMTP {EMAIL_HOST}:{EMAIL_PORT}: TCP reachable")
-    except Exception as e:
-        ok &= check(False, f"SMTP {EMAIL_HOST}:{EMAIL_PORT}: UNREACHABLE ({e})")
+    # ── SMTP TCP connectivity (local only; GitHub Actions uses SendGrid only) ──
+    if not in_ci:
+        try:
+            sock = socket.create_connection((EMAIL_HOST, EMAIL_PORT), timeout=10)
+            sock.close()
+            ok &= check(True, f"SMTP {EMAIL_HOST}:{EMAIL_PORT}: TCP reachable")
+        except Exception as e:
+            ok &= check(False, f"SMTP {EMAIL_HOST}:{EMAIL_PORT}: UNREACHABLE ({e})")
 
     # ── Network: AIHOT ──
     try:

@@ -14,6 +14,7 @@ on:
         options:
           - full
           - dry_run
+          - sendgrid_test
           - smtp_test
           - environment_check
 
@@ -31,6 +32,7 @@ jobs:
       EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       EMAIL_TO: ${{ secrets.EMAIL_TO }}
       SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+      SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
       SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
 
     steps:
@@ -50,9 +52,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'environment_check' || github.event.inputs.mode == '')
         run: python check_environment.py
 
-      - name: SMTP test
-        if: github.event.inputs.mode == 'smtp_test'
-        run: python send_daily_report_email.py --test
+      - name: SendGrid test
+        if: github.event.inputs.mode == 'sendgrid_test' || github.event.inputs.mode == 'smtp_test'
+        run: python send_daily_report_email.py --provider sendgrid --test
 
       - name: Dry run (no email)
         if: github.event.inputs.mode == 'dry_run'
@@ -67,5 +69,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: daily-reports
-          path: outputs/
+          path: |
+            outputs/
+            logs/
           retention-days: 14

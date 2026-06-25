@@ -40,6 +40,7 @@ EMAIL_USER = os.getenv("EMAIL_USER", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_TO = os.getenv("EMAIL_TO", "")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
+SENDGRID_FROM_EMAIL = os.getenv("SENDGRID_FROM_EMAIL", "")
 MAX_EMAIL_ATTACHMENT_MB = int(os.getenv("MAX_EMAIL_ATTACHMENT_MB", "18"))
 
 # ── Paper retrieval ───────────────────────────────────────────────────
