@@ -87,9 +87,15 @@ def send_email(html_content: str, md_content: str = "",
         try:
             logger.info("Email attempt %d/%d to %s via %s:%d",
                         attempt + 1, MAX_RETRIES, EMAIL_TO, EMAIL_HOST, EMAIL_PORT)
-            with smtplib.SMTP_SSL(host=EMAIL_HOST, port=EMAIL_PORT, timeout=30) as server:
-                server.login(EMAIL_USER, EMAIL_PASSWORD)
-                server.send_message(msg)
+            if EMAIL_PORT == 465:
+                with smtplib.SMTP_SSL(host=EMAIL_HOST, port=EMAIL_PORT, timeout=30) as server:
+                    server.login(EMAIL_USER, EMAIL_PASSWORD)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(host=EMAIL_HOST, port=EMAIL_PORT, timeout=30) as server:
+                    server.starttls()
+                    server.login(EMAIL_USER, EMAIL_PASSWORD)
+                    server.send_message(msg)
             logger.info("Email sent successfully!")
             # Write sent marker
             sent_file = OUTPUT_DIR / f"daily_sent_{ds}.ok"
