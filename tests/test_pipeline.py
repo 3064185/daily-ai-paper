@@ -1,6 +1,7 @@
 """Basic pipeline tests."""
 import sys
 import tempfile
+import types
 from pathlib import Path
 from datetime import date
 
@@ -84,3 +85,55 @@ def test_aihot_scraper_rss_parsing():
     result = parse_date(type("obj", (object,), {}))
     assert result is not None
     assert "月" in result
+
+
+def test_run_pipeline_fails_when_email_send_fails(monkeypatch, tmp_path):
+    import daily_pipeline
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(config, "RUN_DATE", date(2026, 6, 25))
+
+    monkeypatch.setitem(sys.modules, "aihot_scraper", types.SimpleNamespace(scrape=lambda: []))
+    monkeypatch.setitem(
+        sys.modules,
+        "paper_search",
+        types.SimpleNamespace(search_all=lambda: ([], [{"source": "stub", "count": 0, "status": "success"}])),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_analysis",
+        types.SimpleNamespace(rule_based_score=lambda paper: 5, analyze_papers=lambda papers: papers),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "full_text_reader",
+        types.SimpleNamespace(
+            select_papers_for_full_text=lambda papers: ([], []),
+            read_papers=lambda papers: papers,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "storage",
+        types.SimpleNamespace(save_news_to_sqlite=lambda news: None, save_news_to_excel=lambda news: None,
+                              save_papers_to_sqlite=lambda papers: None, save_papers_to_excel=lambda papers: None),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "report_generator",
+        types.SimpleNamespace(
+            save_report=lambda **kwargs: {
+                "md": tmp_path / "report.md",
+                "html": tmp_path / "report.html",
+                "md_content": "# report",
+                "html_content": "<html><body>report</body></html>",
+            }
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "send_daily_report_email",
+        types.SimpleNamespace(send_email=lambda **kwargs: False),
+    )
+
+    assert daily_pipeline.run_pipeline(send_email=True) is False

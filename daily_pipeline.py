@@ -215,7 +215,7 @@ def run_pipeline(send_email: bool = False) -> bool:
     logger.info("    %-22s: %.1fs", "total", total_time)
     logger.info("=" * 60)
 
-    return report_success
+    return report_success and (not send_email or email_success)
 
 
 def main():
