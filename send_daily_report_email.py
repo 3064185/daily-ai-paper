@@ -10,7 +10,7 @@ from datetime import date
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formatdate
+from email.utils import formatdate, formataddr
 from pathlib import Path
 from typing import Optional
 
@@ -37,7 +37,7 @@ def send_email(html_content: str, md_content: str = "",
     ds = date_str or today.strftime("%Y%m%d")
 
     msg = MIMEMultipart("alternative")
-    msg["From"] = f"AI 前沿日报 <{EMAIL_USER}>"
+    msg["From"] = formataddr(("AI 前沿日报", EMAIL_USER))
     msg["To"] = EMAIL_TO
     msg["Subject"] = f"AI 前沿与计算机科学论文日报 — {ds}"
     msg["Date"] = formatdate(localtime=True)
