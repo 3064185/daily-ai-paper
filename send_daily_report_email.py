@@ -16,7 +16,7 @@ from typing import Optional
 
 from config import (
     EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO,
-    MAX_EMAIL_ATTACHMENT_MB, OUTPUT_DIR,
+    SENDGRID_API_KEY, MAX_EMAIL_ATTACHMENT_MB, OUTPUT_DIR,
 )
 
 logger = logging.getLogger("email")
@@ -25,21 +25,101 @@ MAX_RETRIES = 3
 RETRY_DELAYS = [5, 30, 120]  # seconds
 
 
-def send_email(html_content: str, md_content: str = "",
-               date_str: Optional[str] = None,
-               attachments: Optional[list[Path]] = None) -> bool:
-    """Send daily report email via SMTP SSL. Returns True on success."""
-    if not all([EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO]):
-        logger.error("Email configuration incomplete. Check .env")
-        return False
+def send_email_sendgrid(html_content: str, md_content: str = "",
+                         date_str: Optional[str] = None,
+                         attachments: Optional[list[Path]] = None) -> bool:
+    """Send email via SendGrid API v3. Returns True on success."""
+    import base64
+    import httpx
 
     today = date.today()
     ds = date_str or today.strftime("%Y%m%d")
+    subject = f"AI 前沿与计算机科学论文日报 \u2014 {ds}"
+
+    # Build SendGrid payload
+    payload = {
+        "personalizations": [{"to": [{"email": EMAIL_TO}]}],
+        "from": {"email": EMAIL_USER, "name": "AI \u524d\u6cbf\u65e5\u62a5"},
+        "subject": subject,
+        "content": [
+            {"type": "text/plain", "value": (md_content or "")[:5000]},
+            {"type": "text/html", "value": html_content},
+        ],
+    }
+
+    # Attachments
+    if attachments:
+        payload["attachments"] = []
+        total_mb = 0
+        for fpath in attachments:
+            fpath = Path(fpath)
+            if not fpath.exists():
+                continue
+            fsize_mb = fpath.stat().st_size / (1024 * 1024)
+            if total_mb + fsize_mb > MAX_EMAIL_ATTACHMENT_MB:
+                logger.warning("Attachment budget exceeded, skipping %s", fpath.name)
+                continue
+            with open(fpath, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            payload["attachments"].append({
+                "filename": fpath.name,
+                "content": b64,
+            })
+            total_mb += fsize_mb
+            logger.debug("Attached: %s (%.1f MB)", fpath.name, fsize_mb)
+
+    # Try up to 2 times
+    for attempt in range(2):
+        try:
+            resp = httpx.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30,
+            )
+            if resp.status_code in (200, 201, 202):
+                logger.info("Email sent via SendGrid!")
+                sent_file = OUTPUT_DIR / f"daily_sent_{ds}.ok"
+                sent_file.write_text(f"Sent via SendGrid at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                return True
+            else:
+                logger.warning("SendGrid attempt %d failed: HTTP %s - %s",
+                               attempt + 1, resp.status_code, resp.text[:200])
+        except Exception as exc:
+            logger.warning("SendGrid attempt %d failed: %s", attempt + 1, exc)
+
+        if attempt == 0:
+            time.sleep(3)
+
+    logger.error("All SendGrid attempts failed.")
+    return False
+
+
+def send_email(html_content: str, md_content: str = "",
+               date_str: Optional[str] = None,
+               attachments: Optional[list[Path]] = None) -> bool:
+    """Send daily report email. Uses SendGrid if SENDGRID_API_KEY is set, else SMTP."""
+    today = date.today()
+    ds = date_str or today.strftime("%Y%m%d")
+
+    if SENDGRID_API_KEY:
+        logger.info("Using SendGrid to send email…")
+        if send_email_sendgrid(html_content, md_content, date_str, attachments):
+            return True
+        logger.warning("SendGrid failed, falling back to SMTP…")
+    # else: fall through to SMTP
+
+    if not all([EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, EMAIL_TO]):
+        logger.error("SMTP config incomplete. Check .env")
+        return False
 
     msg = MIMEMultipart("alternative")
-    msg["From"] = formataddr(("AI 前沿日报", EMAIL_USER))
+    msg["From"] = formataddr(("AI \u524d\u6cbf\u65e5\u62a5", EMAIL_USER))
     msg["To"] = EMAIL_TO
-    msg["Subject"] = f"AI 前沿与计算机科学论文日报 — {ds}"
+    msg["Subject"] = f"AI \u524d\u6cbf\u4e0e\u8ba1\u7b97\u673a\u79d1\u5b66\u8bba\u6587\u65e5\u62a5 \u2014 {ds}"
     msg["Date"] = formatdate(localtime=True)
 
     # Plain text fallback
@@ -52,7 +132,6 @@ def send_email(html_content: str, md_content: str = "",
     total_attached_mb = 0
     if attachments:
         mixed = MIMEMultipart("mixed")
-        # Copy alternative parts
         mixed.attach(msg)
         msg = mixed
 
@@ -97,12 +176,11 @@ def send_email(html_content: str, md_content: str = "",
                     server.login(EMAIL_USER, EMAIL_PASSWORD)
                     server.send_message(msg)
             logger.info("Email sent successfully!")
-            # Write sent marker
             sent_file = OUTPUT_DIR / f"daily_sent_{ds}.ok"
             sent_file.write_text(f"Sent at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             return True
         except smtplib.SMTPAuthenticationError:
-            logger.error("SMTP authentication failed — check EMAIL_USER/EMAIL_PASSWORD")
+            logger.error("SMTP authentication failed \u2014 check EMAIL_USER/EMAIL_PASSWORD")
             return False
         except smtplib.SMTPServerDisconnected as exc:
             last_error = f"SMTPServerDisconnected: {exc}"
@@ -116,7 +194,7 @@ def send_email(html_content: str, md_content: str = "",
 
         if attempt < MAX_RETRIES - 1:
             delay = RETRY_DELAYS[attempt] if attempt < len(RETRY_DELAYS) else 60
-            logger.info("Waiting %d seconds before retry…", delay)
+            logger.info("Waiting %d seconds before retry\u2026", delay)
             time.sleep(delay)
 
     logger.error("All %d email attempts failed. Last error: %s", MAX_RETRIES, last_error)
