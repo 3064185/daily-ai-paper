@@ -142,6 +142,7 @@ if __name__ == "__main__":
         logger.info("Sending test email…")
         success = send_test_email()
         print(f"Test email {'sent successfully!' if success else 'FAILED'}")
+        sys.exit(0 if success else 1)
     else:
         # Try to find today's report
         today = date.today().strftime("%Y%m%d")
