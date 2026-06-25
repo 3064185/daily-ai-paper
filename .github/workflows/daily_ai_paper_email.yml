@@ -46,7 +46,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Environment check
-        if: github.event.inputs.mode == 'environment_check' || github.event.inputs.mode == ''
+        if: github.event_name == "workflow_dispatch" && (github.event.inputs.mode == "environment_check" || github.event.inputs.mode == "")
         run: python check_environment.py
 
       - name: SMTP test

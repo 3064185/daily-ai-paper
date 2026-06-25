@@ -7,6 +7,7 @@ import logging
 import socket
 import sys
 from pathlib import Path
+import os
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("check")
@@ -50,7 +51,11 @@ def main():
     )
 
     env_path = Path(__file__).parent / ".env"
-    ok &= check(env_path.exists(), f".env file: {'found' if env_path.exists() else 'MISSING'}")
+    in_ci = os.environ.get("GITHUB_ACTIONS") == "true"
+    if in_ci:
+        log.info("ℹ️ GitHub Actions detected — .env file not required (env vars from workflow env)")
+    else:
+        ok &= check(env_path.exists(), f".env file: {'found' if env_path.exists() else 'MISSING'}")
 
     # Determine LLM provider
     llm_provider = "OpenAI"
